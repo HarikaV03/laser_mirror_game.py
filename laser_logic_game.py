@@ -3,9 +3,10 @@ Course:      CMPS 5113 - Advanced Programming Language Concepts
 Assignment:  Program 3 - Open-Ended OOP GUI Program (Laser & Mirror Logic)
 Author:      Harika Vemulapalli
 Date:        November 2026
-Description: A grid-based logic and deduction game built with Python tkinter.
-             Players fire laser probes around a 5x5 board to deduce hidden
-             reflectors/blockers and route the beam into the target sensor.
+Description: A visual grid-based logic and deduction game built with Python
+             tkinter Canvas. Players fire laser probes around a 5x5 optics board
+             to deduce hidden mirrors/blockers and route a glowing laser beam
+             into the target receiver.
 """
 
 import random
@@ -14,7 +15,7 @@ from tkinter import messagebox
 
 
 class GridBoard:
-    """Represents a 5x5 grid with hidden puzzle elements and player placements."""
+    """Represents a 5x5 optics grid with hidden puzzle elements and player mirrors."""
 
     SIZE: int = 5
 
@@ -29,12 +30,17 @@ class GridBoard:
         self.generate_puzzle()
 
     def generate_puzzle(self) -> None:
-        """Creates a solvable 5x5 mirror-deduction layout with a target exit."""
+        """Creates a solvable 5x5 mirror-deduction layout with a target receiver."""
         self.solution = [["." for _ in range(self.SIZE)] for _ in range(self.SIZE)]
         self.player_grid = [["." for _ in range(self.SIZE)] for _ in range(self.SIZE)]
 
-        # Place 3 hidden mirrors ('/' or '\') and 1 blocker ('#')
-        positions = [(r, c) for r in range(self.SIZE) for c in range(self.SIZE) if not (r == 4 and c == 2)]
+        # Place 3 hidden mirrors ('/' or '\') and 1 blocker ('#'), avoiding emitter cell (4, 2)
+        positions = [
+            (r, c)
+            for r in range(self.SIZE)
+            for c in range(self.SIZE)
+            if not (r == self.SIZE - 1 and c == 2)
+        ]
         chosen = random.sample(positions, 4)
 
         self.solution[chosen[0][0]][chosen[0][1]] = "/"
@@ -42,7 +48,6 @@ class GridBoard:
         self.solution[chosen[2][0]][chosen[2][1]] = random.choice(["/", "\\"])
         self.solution[chosen[3][0]][chosen[3][1]] = "#"
 
-        # Pick a target edge cell different from bottom-center entry (4, 2)
         edge_targets = [
             (0, 1, 0),
             (0, 3, 0),
@@ -62,10 +67,16 @@ class GridBoard:
             return {0: 3, 1: 2, 2: 1, 3: 0}[direction]
         return direction
 
-    def trace_beam(self, use_player_grid: bool, start_r: int, start_c: int, start_dir: int) -> tuple[str, list[tuple[int, int]]]:
+    def trace_beam(
+        self,
+        use_player_grid: bool,
+        start_r: int,
+        start_c: int,
+        start_dir: int,
+    ) -> tuple[str, list[tuple[int, int]], tuple[int, int] | None]:
         """
-        Traces a beam starting just outside (start_r, start_c) moving in start_dir.
-        Returns (outcome_label, path_cells).
+        Traces a beam starting at (start_r, start_c) moving in start_dir.
+        Returns (outcome_label, path_cells, blocker_cell_if_hit).
         """
         grid = self.player_grid if use_player_grid else self.solution
         r, c, direction = start_r, start_c, start_dir
@@ -75,30 +86,29 @@ class GridBoard:
         while 0 <= r < self.SIZE and 0 <= c < self.SIZE:
             state = (r, c, direction)
             if state in visited_states:
-                return "LOOPED", path
+                return "LOOPED", path, None
             visited_states.add(state)
             path.append((r, c))
 
             cell = grid[r][c]
             if cell == "#":
-                return "ABSORBED (Blocker)", path
+                return "ABSORBED (Blocker)", path, (r, c)
             if cell in ("/", "\\"):
                 direction = self._reflect(direction, cell)
 
             r += self.DR[direction]
             c += self.DC[direction]
 
-        # Exited the board at (r, c) after stepping out of bounds
         exit_r = max(0, min(self.SIZE - 1, r - self.DR[direction]))
         exit_c = max(0, min(self.SIZE - 1, c - self.DC[direction]))
         target_r, target_c, _ = self.target_exit
         if (exit_r, exit_c) == (target_r, target_c):
-            return f"HIT TARGET ({exit_r + 1}, {exit_c + 1})", path
-        return f"EXITED AT ({exit_r + 1}, {exit_c + 1})", path
+            return f"HIT TARGET ({exit_r + 1}, {exit_c + 1})", path, None
+        return f"EXITED AT ({exit_r + 1}, {exit_c + 1})", path, None
 
 
 class LaserPuzzleGame:
-    """Manages puzzle state, probe count, win/loss tally, and selected cell."""
+    """Manages puzzle state, probe count, win/loss tally, and laser trace data."""
 
     def __init__(self) -> None:
         self.board = GridBoard()
@@ -107,8 +117,10 @@ class LaserPuzzleGame:
         self.wins: int = 0
         self.losses: int = 0
         self.last_path: list[tuple[int, int]] = []
+        self.blocker_hit: tuple[int, int] | None = None
+        self.beam_color: str = "#38BDF8"
         self.status: str = (
-            "Select a cell and place '/' or '\\' mirrors, or fire a Probe from an edge to deduce hidden mirrors."
+            "Click a cell to place/rotate '/' or '\\' mirrors, or fire a Probe from an edge to deduce hidden optics."
         )
 
     def new_puzzle(self) -> None:
@@ -116,19 +128,21 @@ class LaserPuzzleGame:
         self.selected_cell = (2, 2)
         self.probes_fired = 0
         self.last_path = []
-        self.status = "New 5x5 puzzle generated! Deduce mirror positions and route the beam to the TARGET cell."
+        self.blocker_hit = None
+        self.beam_color = "#38BDF8"
+        self.status = "New 5x5 optics board ready! Deduce hidden mirrors and route the laser into the glowing TARGET."
 
-    def cycle_player_mirror(self) -> None:
-        """Cycles the selected cell through '.' -> '/' -> '\\' -> '.'."""
-        r, c = self.selected_cell
+    def select_and_cycle_mirror(self, r: int, c: int) -> None:
+        """Selects (r, c) and cycles its mirror state: '.' -> '/' -> '\\' -> '.'."""
+        self.selected_cell = (r, c)
         order = [".", "/", "\\"]
         current = self.board.player_grid[r][c]
         next_val = order[(order.index(current) + 1) % len(order)]
         self.board.player_grid[r][c] = next_val
-        label = "Empty" if next_val == "." else f"Mirror '{next_val}'"
-        self.status = f"Cell ({r + 1}, {c + 1}) set to {label}."
+        label = "Clear" if next_val == "." else f"Mirror '{next_val}'"
+        self.status = f"Cell (Row {r + 1}, Col {c + 1}) -> {label}."
 
-    def fire_probe(self, entry_side: str = "BOTTOM", lane: int = 2) -> None:
+    def fire_probe(self, entry_side: str = "TOP", lane: int = 2) -> None:
         """Fires a test probe into the hidden board from a chosen edge and row/column."""
         self.probes_fired += 1
         lane = max(0, min(GridBoard.SIZE - 1, lane))
@@ -142,17 +156,19 @@ class LaserPuzzleGame:
         else:  # RIGHT
             sr, sc, sdir = lane, GridBoard.SIZE - 1, 3
 
-        outcome, path = self.board.trace_beam(False, sr, sc, sdir)
+        outcome, path, blocker = self.board.trace_beam(False, sr, sc, sdir)
         self.last_path = path
-        self.status = f"Probe #{self.probes_fired} ({entry_side} lane {lane + 1}) -> {outcome}."
+        self.blocker_hit = blocker
+        self.beam_color = "#F43F5E" if blocker else "#38BDF8"
+        self.status = f"Probe #{self.probes_fired} ({entry_side} {lane + 1}) -> {outcome}."
 
     def check_solution(self) -> None:
-        """Checks whether the player's placed mirrors route the beam from (4, 2) up to the TARGET."""
-        outcome, path = self.board.trace_beam(True, GridBoard.SIZE - 1, 2, 0)
+        """Traces the player's mirror setup from Bottom-Center emitter (4, 2) upward."""
+        outcome, path, blocker = self.board.trace_beam(True, GridBoard.SIZE - 1, 2, 0)
         self.last_path = path
+        self.blocker_hit = blocker
         target_r, target_c, _ = self.board.target_exit
 
-        # Verify that the player's mirrors actually deflect the beam into the target
         hit_target = outcome.startswith("HIT TARGET")
         placed_any = any(
             self.board.player_grid[r][c] in ("/", "\\")
@@ -162,28 +178,32 @@ class LaserPuzzleGame:
 
         if hit_target and placed_any:
             self.wins += 1
+            self.beam_color = "#22C55E"
             self.status = (
-                f"SOLVED! Your mirrors routed the beam to TARGET ({target_r + 1}, {target_c + 1}) "
-                f"using {self.probes_fired} probe(s)!"
+                f"TARGET LOCKED! Beam routed to ({target_r + 1}, {target_c + 1}) in {self.probes_fired} probe(s)!"
             )
         else:
             self.losses += 1
+            self.beam_color = "#F59E0B"
             self.status = (
-                f"Not quite ({outcome}). Target is ({target_r + 1}, {target_c + 1}). "
-                "Adjust your mirrors or fire more probes to deduce the path."
+                f"Missed target ({outcome}). Target is ({target_r + 1}, {target_c + 1}). "
+                "Fire more probes or adjust your mirrors."
             )
 
 
 class LaserPuzzleGUI:
-    """Tkinter GUI for the Laser & Mirror Logic game."""
+    """Visual Tkinter Canvas GUI for Laser & Mirror Logic."""
+
+    CELL_SIZE: int = 84
+    PAD: int = 24
 
     def __init__(self, root: tk.Tk, game: LaserPuzzleGame) -> None:
         self.root = root
         self.game = game
 
         self.root.title("Laser & Mirror Logic — CMPS 5113")
-        self.root.geometry("680x620")
-        self.root.minsize(600, 560)
+        self.root.geometry("680x690")
+        self.root.minsize(620, 640)
 
         self._build_ui()
         self._refresh_ui()
@@ -196,8 +216,8 @@ class LaserPuzzleGUI:
         tk.Label(
             top,
             text=(
-                "Logic Goal: Fire probes from edges to deduce hidden mirrors/blockers, then place '/' and '\\' "
-                "mirrors to guide the beam from Bottom-Center (Row 5, Col 3) to the TARGET cell."
+                "Deduction Goal: Fire probes around the board edges to deduce hidden mirrors/blockers, "
+                "then click cells to place '/' or '\\' mirrors and guide the laser into the TARGET."
             ),
             font=("Helvetica", 10),
             fg="#334155",
@@ -228,25 +248,18 @@ class LaserPuzzleGUI:
             command=self._on_fire_probe,
         ).pack(side=tk.LEFT, padx=8)
 
-        # 5x5 Grid
-        grid_frame = tk.Frame(self.root, padx=14, pady=8)
-        grid_frame.pack(expand=True)
-
-        self.cell_buttons: list[list[tk.Button]] = []
-        for r in range(GridBoard.SIZE):
-            row_btns: list[tk.Button] = []
-            for c in range(GridBoard.SIZE):
-                btn = tk.Button(
-                    grid_frame,
-                    text=".",
-                    font=("Courier", 16, "bold"),
-                    width=5,
-                    height=2,
-                    command=lambda row=r, col=c: self._on_select_cell(row, col),
-                )
-                btn.grid(row=r, column=c, padx=4, pady=4)
-                row_btns.append(btn)
-            self.cell_buttons.append(row_btns)
+        # Visual Optics Canvas
+        canvas_size = self.PAD * 2 + self.CELL_SIZE * GridBoard.SIZE
+        self.canvas = tk.Canvas(
+            self.root,
+            width=canvas_size,
+            height=canvas_size,
+            bg="#0B1120",
+            highlightthickness=2,
+            highlightbackground="#1E293B",
+        )
+        self.canvas.pack(padx=14, pady=8)
+        self.canvas.bind("<Button-1>", self._on_canvas_click)
 
         self.status_lbl = tk.Label(
             self.root,
@@ -255,7 +268,7 @@ class LaserPuzzleGUI:
             fg="#0F172A",
             wraplength=640,
             justify="center",
-            pady=6,
+            pady=4,
         )
         self.status_lbl.pack(fill=tk.X, padx=14)
 
@@ -289,13 +302,21 @@ class LaserPuzzleGUI:
             side=tk.RIGHT, padx=(0, 6)
         )
 
-    def _on_select_cell(self, r: int, c: int) -> None:
-        self.game.selected_cell = (r, c)
-        self.game.status = f"Selected cell ({r + 1}, {c + 1}). Click 'Place / Rotate Mirror' to toggle '/' or '\\'."
-        self._refresh_ui()
+    def _cell_center(self, r: int, c: int) -> tuple[float, float]:
+        x = self.PAD + c * self.CELL_SIZE + self.CELL_SIZE / 2
+        y = self.PAD + r * self.CELL_SIZE + self.CELL_SIZE / 2
+        return x, y
+
+    def _on_canvas_click(self, event: tk.Event) -> None:
+        c = int((event.x - self.PAD) // self.CELL_SIZE)
+        r = int((event.y - self.PAD) // self.CELL_SIZE)
+        if 0 <= r < GridBoard.SIZE and 0 <= c < GridBoard.SIZE:
+            self.game.select_and_cycle_mirror(r, c)
+            self._refresh_ui()
 
     def _on_cycle_mirror(self) -> None:
-        self.game.cycle_player_mirror()
+        r, c = self.game.selected_cell
+        self.game.select_and_cycle_mirror(r, c)
         self._refresh_ui()
 
     def _on_fire_probe(self) -> None:
@@ -314,11 +335,10 @@ class LaserPuzzleGUI:
     def _show_help(self) -> None:
         msg = (
             "How to Play Laser & Mirror Logic:\n\n"
-            "1. Choose an edge (TOP, BOTTOM, LEFT, RIGHT) and row/column (1-5), then click 'Fire Probe' "
-            "to see where a beam exits or gets blocked.\n"
-            "2. Use probe results to deduce where hidden mirrors ('/' or '\\') or blockers ('#') sit.\n"
-            "3. Click any grid cell and press 'Place / Rotate Mirror' to place '/' or '\\'.\n"
-            "4. Click 'Check Solution' to test routing the beam from Bottom-Center into the TARGET cell."
+            "1. Pick an edge (TOP, BOTTOM, LEFT, RIGHT) and row/col (1-5), then click 'Fire Probe' "
+            "to trace how a laser beam behaves.\n"
+            "2. Click directly on any grid cell (or use 'Place / Rotate Mirror') to place '/' or '\\' mirrors.\n"
+            "3. Click 'Check Solution' to fire from the bottom emitter (Col 3) into the glowing TARGET."
         )
         messagebox.showinfo("Help — Laser & Mirror Logic", msg)
 
@@ -330,33 +350,118 @@ class LaserPuzzleGUI:
         )
         messagebox.showinfo("Credits", msg)
 
+    def _draw_mirror(self, r: int, c: int, mirror_type: str) -> None:
+        cx, cy = self._cell_center(r, c)
+        half = self.CELL_SIZE * 0.34
+
+        if mirror_type == "/":
+            x1, y1, x2, y2 = cx - half, cy + half, cx + half, cy - half
+            bx1, by1, bx2, by2 = x1 + 3, y1 + 3, x2 + 3, y2 + 3
+        else:  # '\'
+            x1, y1, x2, y2 = cx - half, cy - half, cx + half, cy + half
+            bx1, by1, bx2, by2 = x1 - 3, y1 + 3, x2 - 3, y2 + 3
+
+        # Dark backing + bright reflective glass surface
+        self.canvas.create_line(bx1, by1, bx2, by2, fill="#475569", width=6, capstyle=tk.ROUND)
+        self.canvas.create_line(x1, y1, x2, y2, fill="#E2E8F0", width=5, capstyle=tk.ROUND)
+        self.canvas.create_line(x1, y1, x2, y2, fill="#BAE6FD", width=2, capstyle=tk.ROUND)
+
+    def _draw_laser_beam(self) -> None:
+        if not self.game.last_path:
+            return
+
+        points: list[float] = []
+        for r, c in self.game.last_path:
+            cx, cy = self._cell_center(r, c)
+            points.extend([cx, cy])
+
+        if len(points) >= 4:
+            # Outer glow + inner high-intensity laser core
+            self.canvas.create_line(
+                points,
+                fill=self.game.beam_color,
+                width=10,
+                smooth=False,
+                joinstyle=tk.ROUND,
+                capstyle=tk.ROUND,
+            )
+            self.canvas.create_line(
+                points,
+                fill="#FFFFFF",
+                width=3,
+                smooth=False,
+                joinstyle=tk.ROUND,
+                capstyle=tk.ROUND,
+            )
+
+        # Mark start and end of beam
+        sx, sy = points[0], points[1]
+        ex, ey = points[-2], points[-1]
+        self.canvas.create_oval(sx - 6, sy - 6, sx + 6, sy + 6, fill="#FACC15", outline="#FFFFFF", width=2)
+        self.canvas.create_oval(ex - 6, ey - 6, ex + 6, ey + 6, fill=self.game.beam_color, outline="#FFFFFF", width=2)
+
     def _refresh_ui(self) -> None:
         self.stats_lbl.config(
             text=f"Probes Fired: {self.game.probes_fired}   |   Wins: {self.game.wins}   |   Losses: {self.game.losses}"
         )
         self.status_lbl.config(text=self.game.status)
+        self.canvas.delete("all")
 
         tr, tc, _ = self.game.board.target_exit
         sr, sc = self.game.selected_cell
-        path_set = set(self.game.last_path)
+        emitter_r, emitter_c = GridBoard.SIZE - 1, 2
 
+        # Draw grid cells
         for r in range(GridBoard.SIZE):
             for c in range(GridBoard.SIZE):
-                val = self.game.board.player_grid[r][c]
-                display_txt = val
-                bg = "#F8FAFC"
+                x1 = self.PAD + c * self.CELL_SIZE
+                y1 = self.PAD + r * self.CELL_SIZE
+                x2 = x1 + self.CELL_SIZE
+                y2 = y1 + self.CELL_SIZE
 
-                if (r, c) == (tr, tc) and val == ".":
-                    display_txt = "TGT"
-                    bg = "#FEF3C7"
-                elif (r, c) in path_set and val == ".":
-                    display_txt = "*"
-                    bg = "#E0F2FE"
+                fill = "#111827"
+                outline = "#283548"
+                width = 1.5
+
+                if (r, c) == (tr, tc):
+                    fill = "#1E1B4B"
+                    outline = "#FBBF24"
+                    width = 2.5
+                elif (r, c) == (emitter_r, emitter_c):
+                    fill = "#0F2942"
+                    outline = "#38BDF8"
+                    width = 2
 
                 if (r, c) == (sr, sc):
-                    bg = "#DBEAFE"
+                    outline = "#22D3EE"
+                    width = 3
 
-                self.cell_buttons[r][c].config(text=display_txt, bg=bg)
+                self.canvas.create_rectangle(x1 + 2, y1 + 2, x2 - 2, y2 - 2, fill=fill, outline=outline, width=width)
+
+                # Target beacon ring
+                if (r, c) == (tr, tc):
+                    cx, cy = self._cell_center(r, c)
+                    self.canvas.create_oval(cx - 18, cy - 18, cx + 18, cy + 18, outline="#FBBF24", width=3)
+                    self.canvas.create_oval(cx - 8, cy - 8, cx + 8, cy + 8, fill="#F59E0B", outline="")
+
+        # Draw glowing laser path on top of dark cells
+        self._draw_laser_beam()
+
+        # Draw player mirrors and any revealed blocker on top of beam
+        for r in range(GridBoard.SIZE):
+            for c in range(GridBoard.SIZE):
+                m_val = self.game.board.player_grid[r][c]
+                if m_val in ("/", "\\"):
+                    self._draw_mirror(r, c, m_val)
+
+                if self.game.blocker_hit == (r, c):
+                    x1 = self.PAD + c * self.CELL_SIZE + 16
+                    y1 = self.PAD + r * self.CELL_SIZE + 16
+                    x2 = self.PAD + (c + 1) * self.CELL_SIZE - 16
+                    y2 = self.PAD + (r + 1) * self.CELL_SIZE - 16
+                    self.canvas.create_rectangle(x1, y1, x2, y2, fill="#7F1D1D", outline="#EF4444", width=3)
+                    self.canvas.create_line(x1 + 8, y1 + 8, x2 - 8, y2 - 8, fill="#FCA5A5", width=3)
+                    self.canvas.create_line(x2 - 8, y1 + 8, x1 + 8, y2 - 8, fill="#FCA5A5", width=3)
 
 
 def main() -> None:
